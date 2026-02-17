@@ -896,7 +896,7 @@ app.get('/server/info', (_, res) =>
 
 net
     .createServer(socket => {
-        const MAX_BUFFER_SIZE = 10 * 1024 * 1024; // 10MB total buffer limit
+        const MAX_BUFFER_SIZE = 12 * 1024 * 1024; // 12MB total buffer limit
         const remoteAddress = `${socket.remoteAddress}:${socket.remotePort}`;
         const state = { step: 'HELLO', buffer: '', hashcash: null };
 
