@@ -1,0 +1,1 @@
+Run `init.sh` to get started.

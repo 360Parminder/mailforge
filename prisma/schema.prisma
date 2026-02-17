@@ -1,0 +1,344 @@
+// MailForge Prisma Schema
+// Combined schema for email server with user management and domain features
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ============================================================================
+// USER MANAGEMENT
+// ============================================================================
+
+model User {
+  id            String    @id @default(uuid())
+  // User authentication & identity
+  username      String    // email username (before @)
+  domain        String    // email domain (after @)
+  email         String?   @unique // full email for web login (optional)
+  password      String    @map("password_hash") // bcrypt hashed password
+  
+  // User profile (from your schema)
+  name          String?
+  avatar        String?   @default("https://i.ibb.co/Vc2BSM8Z/image.webp")
+  dob           DateTime?
+  address       String?
+  contact       String?
+  gender        Gender?
+  role          Role      @default(user)
+  
+  // Account status & security
+  active        Boolean   @default(true)
+  is_banned     Boolean   @default(false) @map("is_banned")
+  is_admin      Boolean   @default(false) @map("is_admin")
+  
+  // Tracking
+  ip            String?   @db.VarChar(48)
+  user_agent    String?   @db.Text
+  deleted_at    DateTime? @map("deleted_at")
+  createdAt     DateTime  @default(now()) @map("created_at")
+  updatedAt     DateTime  @updatedAt @map("updated_at")
+
+  // Relations
+  domains           Domain[]
+  emails            Email[]
+  sentEmails        Email[]          @relation("SentEmails")
+  secretCodes       UserSecretCode[]
+  starredEmails     EmailStar[]
+  drafts            EmailDraft[]
+  contacts          Contact[]
+  attachments       Attachment[]
+  storageLimit      UserStorageLimit?
+  settings          UserSettings?
+
+  @@unique([username, domain])
+  @@index([username])
+  @@index([email])
+  @@index([ip])
+  @@map("users")
+}
+
+model UserSecretCode {
+  code       String   @id @db.VarChar(64)
+  user_id    String   @map("user_id")
+  user       User     @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  created_at DateTime @default(now()) @map("created_at")
+  ip         String?  @db.VarChar(48)
+  user_agent String?  @db.Text
+
+  @@index([user_id])
+  @@map("user_secret_codes")
+}
+
+model UserSettings {
+  user_id               String   @id @map("user_id")
+  user                  User     @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  notifications_enabled Boolean  @default(false) @map("notifications_enabled")
+  created_at            DateTime @default(now()) @map("created_at")
+  updated_at            DateTime @updatedAt @map("updated_at")
+
+  @@map("user_settings")
+}
+
+model UserStorageLimit {
+  user_id       String   @id @map("user_id")
+  user          User     @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  storage_limit BigInt   @default(1073741824) @map("storage_limit") // 1GB default
+  created_at    DateTime @default(now()) @map("created_at")
+  updated_at    DateTime @updatedAt @map("updated_at")
+
+  @@map("user_storage_limits")
+}
+
+// ============================================================================
+// DOMAIN MANAGEMENT
+// ============================================================================
+
+model Domain {
+  id                String   @id @default(uuid())
+  domain            String   @unique
+  owner             String   // User ID
+  ownerUser         User     @relation(fields: [owner], references: [id], onDelete: Cascade)
+  verified          Boolean  @default(false)
+  verificationToken String?  @map("verification_token")
+  dnsRecords        Json?    @map("dns_records")
+  users             Json     @default("[]") // JSON array of user IDs with access
+  createdAt         DateTime @default(now()) @map("created_at")
+  updatedAt         DateTime @updatedAt @map("updated_at")
+
+  @@index([domain])
+  @@index([owner])
+  @@map("domains")
+}
+
+// ============================================================================
+// EMAIL SYSTEM
+// ============================================================================
+
+model Email {
+  id             String               @id @default(uuid())
+  
+  // Message identification (from your schema)
+  messageId      String?              @unique @map("message_id")
+  avatar         String?
+  
+  // Addressing
+  from_address   String               @db.VarChar(255) // user@domain
+  from_domain    String               @db.VarChar(255)
+  to_address     String               @db.VarChar(255) // primary recipient
+  to_domain      String               @db.VarChar(255)
+  recipient      String?              // Additional recipient field from your schema
+  
+  // Multiple recipients (from your schema)
+  cc             String[]             @default([])
+  bcc            String[]             @default([])
+  
+  // Content
+  subject        String?              @db.Text
+  body           String?              @db.Text // plain text body
+  text           String?              @db.Text // alias for body
+  html           String?              @db.Text // alias for html_body
+  html_body      String?              @map("html_body") @db.Text
+  content_type   String?              @default("text/plain") @map("content_type") @db.VarChar(50)
+  
+  // Attachments
+  attachments    Json                 @default("[]")
+  emailAttachments Attachment[]
+  
+  // Status & delivery
+  status         EmailStatus          @default(pending)
+  error_message  String?              @map("error_message") @db.Text
+  sent_at        DateTime?            @default(now()) @map("sent_at")
+  date           DateTime             @default(now())
+  
+  // Organization (from your schema)
+  folder         Folder               @default(inbox)
+  labels         String[]             @default([])
+  
+  // Classification
+  classification EmailClassification  @default(primary)
+  
+  // Thread & reply
+  threadId       String?              @map("thread_id")
+  thread_id_ref  String?              @map("thread_id_ref")
+  threadRef      Email?               @relation("EmailThread", fields: [thread_id_ref], references: [id])
+  threadEmails   Email[]              @relation("EmailThread")
+  inReplyTo      String?              @map("in_reply_to")
+  reply_to_id    String?              @map("reply_to_id")
+  replyTo        Email?               @relation("EmailReply", fields: [reply_to_id], references: [id])
+  replies        Email[]              @relation("EmailReply")
+  
+  // Flags & states (from your schema)
+  unread         Boolean              @default(true)
+  flagged        Boolean              @default(false)
+  starred        Boolean              @default(false)
+  
+  // Advanced features
+  snooze_until   DateTime?            @map("snooze_until")
+  read_at        DateTime?            @map("read_at")
+  scheduled_at   DateTime?            @map("scheduled_at")
+  expires_at     DateTime?            @map("expires_at")
+  self_destruct  Boolean              @default(false) @map("self_destruct")
+  
+  // User ownership
+  user          String                 // User ID
+  userInfo       User?                @relation(fields: [user], references: [id], onDelete: Cascade)
+  
+  // Additional user relation for sent emails
+  from_user_id   String?                 @map("from_user_id")
+  fromUser       User?                @relation("SentEmails", fields: [from_user_id], references: [id])
+  
+  // Timestamps
+  createdAt      DateTime             @default(now()) @map("created_at")
+  updatedAt      DateTime             @updatedAt @map("updated_at")
+
+  // Stars relation
+  stars          EmailStar[]
+
+  @@index([messageId])
+  @@index([from_address])
+  @@index([to_address])
+  @@index([status])
+  @@index([user])
+  @@index([folder])
+  @@index([date])
+  @@index([thread_id_ref])
+  @@map("emails")
+}
+
+model EmailStar {
+  email_id   String   @map("email_id")
+  email      Email    @relation(fields: [email_id], references: [id], onDelete: Cascade)
+  user_id    String   @map("user_id")
+  user       User     @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  starred_at DateTime @default(now()) @map("starred_at")
+
+  @@id([email_id, user_id])
+  @@index([user_id])
+  @@map("email_stars")
+}
+
+model EmailDraft {
+  id           String   @id @default(uuid())
+  user_id      String   @map("user_id")
+  user         User     @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  to_address   String?  @map("to_address") @db.VarChar(255)
+  subject      String?  @db.Text
+  body         String?  @db.Text
+  content_type String?  @default("text/plain") @map("content_type") @db.VarChar(50)
+  html_body    String?  @map("html_body") @db.Text
+  created_at   DateTime @default(now()) @map("created_at")
+  updated_at   DateTime @updatedAt @map("updated_at")
+
+  @@index([user_id])
+  @@map("email_drafts")
+}
+
+// ============================================================================
+// CONTACTS
+// ============================================================================
+
+model Contact {
+  id            String   @id @default(uuid())
+  user_id       String   @map("user_id")
+  user          User     @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  full_name     String   @map("full_name") @db.VarChar(255)
+  email_address String   @map("email_address") @db.VarChar(255)
+  tag           String?  @db.VarChar(50)
+  created_at    DateTime @default(now()) @map("created_at")
+  updated_at    DateTime @updatedAt @map("updated_at")
+
+  @@unique([user_id, email_address])
+  @@index([user_id])
+  @@index([email_address])
+  @@map("contacts")
+}
+
+// ============================================================================
+// ATTACHMENTS & STORAGE
+// ============================================================================
+
+model Attachment {
+  id         String    @id @default(uuid())
+  user_id    String?   @map("user_id")
+  user       User?     @relation(fields: [user_id], references: [id], onDelete: SetNull)
+  key        String    @unique @db.Text
+  filename   String    @db.Text
+  size       Int       // Max 25MB enforced at application level
+  type       String    @db.Text
+  created_at DateTime  @default(now()) @map("created_at")
+  expires_at DateTime? @map("expires_at")
+  email_id   String?   @map("email_id")
+  email      Email?    @relation(fields: [email_id], references: [id], onDelete: SetNull)
+  status     String    @default("pending") @db.Text
+
+  @@index([user_id])
+  @@index([expires_at])
+  @@index([email_id])
+  @@map("attachments")
+}
+
+// ============================================================================
+// SPAM PREVENTION
+// ============================================================================
+
+model UsedHashcashToken {
+  token      String   @id @db.Text
+  expires_at DateTime @map("expires_at")
+
+  @@index([expires_at])
+  @@map("used_hashcash_tokens")
+}
+
+// ============================================================================
+// ENUMS
+// ============================================================================
+
+enum Gender {
+  male
+  female
+  other
+  prefer_not_to_say
+}
+
+enum Role {
+  admin
+  developer
+  tester
+  user
+}
+
+enum Folder {
+  inbox
+  sent
+  drafts
+  trash
+  spam
+  archive
+}
+
+enum EmailStatus {
+  pending
+  sending
+  sent
+  failed
+  rejected
+  scheduled
+  spam
+
+  @@map("email_status")
+}
+
+enum EmailClassification {
+  primary
+  promotions
+  social
+  forums
+  updates
+
+  @@map("email_classification")
+}
