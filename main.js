@@ -83,7 +83,7 @@ setInterval(async () => {
     }
 }, 3600000); // Run every hour
 
-const PROTOCOL_VERSION = 'SHARP/1.3'
+const PROTOCOL_VERSION = 'mailforge/1.3'
 
 const KEYWORDS = {
     promotions: new Set([
@@ -641,10 +641,10 @@ app.post('/send', validateApiKey, async (req, res) => {
         try {
             fp = parseSharpAddress(emailData.from);
             tp = parseSharpAddress(emailData.to);
-        } catch {
+        } catch (e) {
             return res.status(400).json({
                 success: false,
-                message: 'Invalid SHARP address format'
+                message: 'Invalid kosh address format'
             });
         }
 

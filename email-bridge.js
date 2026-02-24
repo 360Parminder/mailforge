@@ -11,7 +11,7 @@ const SMTP_BRIDGE_PORT = +process.env.SMTP_BRIDGE_PORT || 2525;
 export async function sendToTraditionalEmail(fromEmail, toEmail, subject, textBody, htmlBody) {
     try {
         const [, toDomain] = toEmail.split('@');
-        
+
         // Resolve MX records for recipient domain
         const mxRecords = await resolveMx(toDomain);
         if (!mxRecords || mxRecords.length === 0) {
@@ -20,7 +20,7 @@ export async function sendToTraditionalEmail(fromEmail, toEmail, subject, textBo
 
         // Use the highest priority MX server
         const mx = mxRecords[0];
-        
+
         console.log(`📮 Sending to ${mx.exchange} (MX for ${toDomain})...`);
 
         // Create direct SMTP connection to recipient's mail server
@@ -46,7 +46,7 @@ export async function sendToTraditionalEmail(fromEmail, toEmail, subject, textBo
         };
 
         const info = await transporter.sendMail(mailOptions);
-        
+
         console.log(`✅ Email sent successfully to ${toEmail} (MessageID: ${info.messageId})`);
         return info;
     } catch (error) {
@@ -62,15 +62,15 @@ export function createBridgeReceiver() {
         secure: false,
         allowInsecureAuth: true,
         disabledCommands: ['STARTTLS'], // For simplicity
-        
+
         onData(stream, session, callback) {
             simpleParser(stream, async (err, parsed) => {
                 if (err) {
                     console.error('Error parsing incoming email:', err);
                     return callback(err);
                 }
-                
-                
+
+
                 try {
                     console.log(parsed);
                     const fromEmail = parsed.from?.value?.[0]?.address || '';
@@ -78,7 +78,8 @@ export function createBridgeReceiver() {
                     const subject = parsed.subject || '(No Subject)';
                     const textBody = parsed.text || '';
                     const htmlBody = parsed.html || '';
-                    
+                    const recipient = parsed.from?.value[0]?.name || '';
+
                     console.log('\n' + '='.repeat(80));
                     console.log(`📨 INCOMING EMAIL`);
                     console.log('='.repeat(80));
@@ -91,10 +92,10 @@ export function createBridgeReceiver() {
 
                     // Recipient should be user@yourdomain.com
                     const [username, domain] = toEmail.split('@');
-                    
+
                     // Check if recipient exists
                     const user = await findUser(username, domain);
-                    
+
                     if (!user) {
                         console.log(`❌ ERROR: Recipient ${toEmail} not found on this server`);
                         throw new Error('Recipient not found');
@@ -114,9 +115,10 @@ export function createBridgeReceiver() {
                         status: 'sent',
                         folder: 'inbox',
                         sent_at: new Date(),
-                        userInfo:user.id,
-                        messageId : parsed.messageId || null
-                        
+                        userInfo: user.id,
+                        messageId: parsed.messageId || null,
+                        recipient: recipient,
+
                     });
 
                     console.log(`✅ Email #${email.id} successfully delivered to ${toEmail}`);
