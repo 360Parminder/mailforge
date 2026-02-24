@@ -66,7 +66,7 @@ export function createBridgeReceiver() {
         onData(stream, session, callback) {
             console.log('Received email from', session.envelope.mailFrom.address);
             console.log('Received email to', session.envelope.rcptTo);
-            console.log('Received email with subject', stream;
+            console.log('Received email with subject', stream);
             simpleParser(stream, async (err, parsed) => {
                 if (err) {
                     console.error('Error parsing incoming email:', err);
