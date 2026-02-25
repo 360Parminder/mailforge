@@ -31,6 +31,9 @@ export async function sendToTraditionalEmail(fromEmail, toEmail, subject, textBo
             tls: {
                 rejectUnauthorized: false
             },
+            connectionTimeout: 10000,
+            greetingTimeout: 5000,
+            socketTimeout: 10000,
             // No authentication needed - direct server-to-server
         });
 
@@ -76,8 +79,11 @@ export function createBridgeReceiver() {
 
                 try {
                     console.log(parsed);
-                    const fromEmail = parsed.from?.value?.[0]?.address || '';
-                    const toEmail = parsed.to?.value?.[0]?.address || '';
+                    const fromEmail = parsed.from?.value?.[0]?.address || session.envelope.mailFrom?.address || '';
+                    // Use the actual SMTP envelope recipient, as parsed.to might be missing/incorrect for BCCs or mailing lists
+                    const toEmail = (session.envelope.rcptTo && session.envelope.rcptTo.length > 0)
+                        ? session.envelope.rcptTo[0].address
+                        : (parsed.to?.value?.[0]?.address || '');
                     const subject = parsed.subject || '(No Subject)';
                     const textBody = parsed.text || '';
                     const htmlBody = parsed.html || '';
