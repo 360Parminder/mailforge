@@ -1,6 +1,4 @@
-import { PrismaClient } from '@prisma/client';
-
-const prisma = new PrismaClient();
+import { prisma } from '../lib/prisma.js';
 
 // API key from environment variable for app server authentication
 const APP_SERVER_API_KEY = process.env.APP_SERVER_API_KEY;
@@ -12,12 +10,12 @@ const APP_SERVER_API_KEY = process.env.APP_SERVER_API_KEY;
  */
 export async function validateApiKey(req, res, next) {
     const apiKey = req.headers['x-api-key'] || req.headers['authorization']?.replace('Bearer ', '');
-    
+
     console.log('🔑 API Auth - Received headers:', {
         'x-api-key': req.headers['x-api-key'] ? 'present' : 'missing',
         'authorization': req.headers['authorization'] ? 'present' : 'missing'
     });
-    
+
     if (!apiKey) {
         return res.status(401).json({
             success: false,

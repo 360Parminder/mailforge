@@ -7,10 +7,10 @@ import { validateApiKey } from './middleware/apiAuth.js'
 import { createSMTPServer } from './smtp-server.js'
 import { createIMAPServer } from './imap-server.js'
 import { createBridgeReceiver, testEmailSending, sendToTraditionalEmail } from './email-bridge.js'
-import { 
-    prisma, 
-    createEmail, 
-    updateEmailStatus, 
+import {
+    prisma,
+    createEmail,
+    updateEmailStatus,
     getEmailById,
     verifyUser,
     findUser,
@@ -36,7 +36,7 @@ setInterval(async () => {
     } catch (error) {
         console.error('Error updating stale pending emails:', error);
     }
-}, 10000);
+}, 30000);
 
 // Cleanup for expired emails
 setInterval(async () => {
@@ -69,7 +69,7 @@ setInterval(async () => {
     } catch (error) {
         console.error('Error cleaning up expired emails:', error);
     }
-}, 10000);
+}, 60000);
 
 // Cleanup for used hashcash tokens
 setInterval(async () => {
@@ -114,7 +114,7 @@ const HASHCASH_THRESHOLDS = {
 // logEmail helper function using Prisma
 const logEmail = async (fa, fd, ta, td, s, b, ct = 'text/plain', hb = null, st = 'pending', sa = null, rid = null, tid = null, ea = null, sd = false) => {
     const classification = classifyEmail(s, b, hb);
-    
+
     // Determine which user to associate the email with
     // For incoming/received emails (status: sent), use the recipient (to)
     // For outgoing/pending emails, try sender first, then recipient
@@ -125,7 +125,7 @@ const logEmail = async (fa, fd, ta, td, s, b, ct = 'text/plain', hb = null, st =
     if (!user) {
         user = await findUser(fa.split('@')[0], fd);
     }
-    
+
     const email = await createEmail({
         user: user?.id || 'system',
         from_address: fa,
@@ -481,7 +481,7 @@ async function sendEmailToRemoteServer(emailData) {
 async function processScheduledEmails() {
     try {
         const emails = await getScheduledEmails();
-        
+
         for (const email of emails) {
             console.log(`Processing scheduled email ID ${email.id} scheduled for ${email.scheduled_at}`);
             await prisma.email.update({
@@ -856,8 +856,8 @@ app.get('/server/info', (_, res) =>
         },
         features: {
             authentication: ['api-key'],
-            turnstile: !!process.env.PRIVATE_TURNSTILE_SECRET_KEY && 
-                       process.env.PRIVATE_TURNSTILE_SECRET_KEY !== '1x0000000000000000000000000000000AA',
+            turnstile: !!process.env.PRIVATE_TURNSTILE_SECRET_KEY &&
+                process.env.PRIVATE_TURNSTILE_SECRET_KEY !== '1x0000000000000000000000000000000AA',
             scheduled_emails: true,
             self_destruct_emails: true,
             attachments: true,
