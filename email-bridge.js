@@ -2,9 +2,20 @@ import nodemailer from 'nodemailer';
 import { SMTPServer } from 'smtp-server';
 import { simpleParser } from 'mailparser';
 import { resolveMx } from './dns-utils.js';
-import { createEmail, findUser } from './lib/prisma.js';
+import { createEmail, findUser, createAttachment } from './lib/prisma.js';
+import fs from 'fs';
+import path from 'path';
+import crypto from 'crypto';
+
 const DOMAIN = process.env.DOMAIN_NAME || 'localhost';
 const SMTP_BRIDGE_PORT = +process.env.SMTP_BRIDGE_PORT || 2525;
+const ATTACHMENTS_DIR = path.resolve('./attachments');
+
+// Ensure attachments directory exists
+if (!fs.existsSync(ATTACHMENTS_DIR)) {
+    fs.mkdirSync(ATTACHMENTS_DIR, { recursive: true });
+    console.log(`📁 Created attachments directory: ${ATTACHMENTS_DIR}`);
+}
 
 // Send email directly to recipient's mail server (no relay needed)
 // Note: This function only handles SMTP delivery - caller is responsible for database logging
@@ -142,6 +153,43 @@ export function createBridgeReceiver() {
                     });
 
                     console.log(`✅ Email #${email.id} successfully delivered to ${toEmail}`);
+
+                    // Process incoming attachments
+                    if (parsed.attachments && parsed.attachments.length > 0) {
+                        console.log(`📎 Processing ${parsed.attachments.length} attachment(s)...`);
+
+                        for (const att of parsed.attachments) {
+                            try {
+                                // Generate unique key for the file
+                                const uuid = crypto.randomUUID();
+                                const safeName = (att.filename || 'unnamed').replace(/[^a-zA-Z0-9._-]/g, '_');
+                                const key = `${uuid}_${safeName}`;
+                                const filePath = path.join(ATTACHMENTS_DIR, key);
+
+                                // Write attachment content to disk
+                                fs.writeFileSync(filePath, att.content);
+
+                                // Create attachment record in database
+                                await createAttachment({
+                                    user_id: user.id,
+                                    key: key,
+                                    filename: att.filename || 'unnamed',
+                                    size: att.size || att.content.length,
+                                    type: att.contentType || 'application/octet-stream',
+                                    email_id: email.id,
+                                    status: 'sent'
+                                });
+
+                                console.log(`  📎 Saved attachment: ${att.filename || 'unnamed'} (${att.size || att.content.length} bytes) → ${key}`);
+                            } catch (attErr) {
+                                console.error(`  ❌ Failed to save attachment ${att.filename}:`, attErr);
+                                // Continue processing other attachments even if one fails
+                            }
+                        }
+
+                        console.log(`📎 Finished processing attachments for email #${email.id}`);
+                    }
+
                     console.log('='.repeat(80) + '\n');
                     callback();
                 } catch (error) {

@@ -2,6 +2,8 @@ import express from 'express'
 import net from 'net'
 import cors from 'cors'
 import { createHash } from 'crypto'
+import fs from 'fs'
+import path from 'path'
 import { resolveSrv, verifySharpDomain } from './dns-utils.js'
 import { validateApiKey } from './middleware/apiAuth.js'
 import { createSMTPServer } from './smtp-server.js'
@@ -1065,6 +1067,43 @@ app.post('/reply', validateApiKey, async (req, res) => {
         return res.status(400).json({ success: false, message: e.message });
     }
 })
+
+const ATTACHMENTS_DIR = path.resolve('./attachments');
+
+// Download attachment endpoint
+app.get('/attachments/:key', async (req, res) => {
+    try {
+        const { key } = req.params;
+
+        // Look up attachment in database
+        const attachment = await prisma.attachment.findUnique({
+            where: { key }
+        });
+
+        if (!attachment) {
+            return res.status(404).json({ success: false, message: 'Attachment not found' });
+        }
+
+        const filePath = path.join(ATTACHMENTS_DIR, key);
+
+        // Check file exists on disk
+        if (!fs.existsSync(filePath)) {
+            return res.status(404).json({ success: false, message: 'Attachment file not found on disk' });
+        }
+
+        // Set headers for download
+        res.setHeader('Content-Type', attachment.type || 'application/octet-stream');
+        res.setHeader('Content-Disposition', `inline; filename="${attachment.filename}"`);
+        res.setHeader('Content-Length', attachment.size);
+
+        // Stream the file
+        const fileStream = fs.createReadStream(filePath);
+        fileStream.pipe(res);
+    } catch (error) {
+        console.error('Error serving attachment:', error);
+        return res.status(500).json({ success: false, message: 'Error serving attachment' });
+    }
+});
 
 app.get('/server/health', (_, res) =>
     res.json({
