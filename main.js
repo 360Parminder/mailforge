@@ -111,8 +111,15 @@ const HASHCASH_THRESHOLDS = {
     REJECT: 3
 };
 
+// Generate a unique Message-ID for outgoing emails
+function generateMessageId(domain) {
+    const timestamp = Date.now();
+    const random = Math.random().toString(36).substring(2, 12);
+    return `<${timestamp}.${random}@${domain}>`;
+}
+
 // logEmail helper function using Prisma
-const logEmail = async (fa, fd, ta, td, s, b, ct = 'text/plain', hb = null, st = 'pending', sa = null, rid = null, tid = null, ea = null, sd = false) => {
+const logEmail = async (fa, fd, ta, td, s, b, ct = 'text/plain', hb = null, st = 'pending', sa = null, rid = null, tid = null, ea = null, sd = false, mid = null) => {
     const classification = classifyEmail(s, b, hb);
 
     // Determine which user to associate the email with
@@ -125,6 +132,9 @@ const logEmail = async (fa, fd, ta, td, s, b, ct = 'text/plain', hb = null, st =
     if (!user) {
         user = await findUser(fa.split('@')[0], fd);
     }
+
+    // Auto-generate messageId if not provided
+    const messageId = mid || generateMessageId(fd);
 
     const email = await createEmail({
         user: user?.id || 'system',
@@ -142,9 +152,10 @@ const logEmail = async (fa, fd, ta, td, s, b, ct = 'text/plain', hb = null, st =
         reply_to_id: rid,
         thread_id: tid,
         expires_at: ea,
-        self_destruct: sd
+        self_destruct: sd,
+        messageId: messageId
     });
-    return [{ id: email.id }];
+    return [{ id: email.id, messageId: messageId }];
 }
 
 const parseSharpAddress = a => {
@@ -763,7 +774,7 @@ app.post('/send', validateApiKey, async (req, res) => {
 
         // Send to external email servers using SMTP
         try {
-            await sendToTraditionalEmail(
+            const smtpResult = await sendToTraditionalEmail(
                 from,
                 to,
                 subject,
@@ -772,9 +783,14 @@ app.post('/send', validateApiKey, async (req, res) => {
             );
 
             if (emailId) {
+                const updateData = { status: 'sent', folder: 'sent', sent_at: new Date(), unread: false };
+                // Save the SMTP messageId returned by the remote server
+                if (smtpResult && smtpResult.messageId) {
+                    updateData.messageId = smtpResult.messageId;
+                }
                 await prisma.email.update({
                     where: { id: emailId },
-                    data: { status: 'sent', folder: 'sent', sent_at: new Date(), unread: false }
+                    data: updateData
                 });
                 if (attachmentKeys.length > 0) {
                     await prisma.attachment.updateMany({
@@ -902,6 +918,9 @@ app.post('/reply', validateApiKey, async (req, res) => {
         const classification = classifyEmail(subject, body, html_body);
         const replyUser = await findUser(fp.username, fp.domain);
 
+        // Generate a messageId for the reply
+        const replyMessageId = generateMessageId(fp.domain);
+
         const replyEmail = await createEmail({
             user: replyUser?.id || 'system',
             from_address: from,
@@ -920,7 +939,7 @@ app.post('/reply', validateApiKey, async (req, res) => {
             expires_at: expires_at,
             self_destruct: self_destruct,
             sent_at: new Date(),
-            messageId: null,
+            messageId: replyMessageId,
             inReplyTo: inReplyTo
         });
 
@@ -964,7 +983,8 @@ app.post('/reply', validateApiKey, async (req, res) => {
                 thread_id: thread_id,
                 expires_at: expires_at,
                 self_destruct: self_destruct,
-                sent_at: new Date()
+                sent_at: new Date(),
+                messageId: replyMessageId
             });
 
             // Update sender's copy as sent
@@ -986,7 +1006,7 @@ app.post('/reply', validateApiKey, async (req, res) => {
 
         // ── External / Traditional delivery (Gmail, Outlook, etc.) ──
         try {
-            await sendToTraditionalEmail(
+            const smtpResult = await sendToTraditionalEmail(
                 from,
                 to,
                 subject,
@@ -995,9 +1015,14 @@ app.post('/reply', validateApiKey, async (req, res) => {
                 { inReplyTo, references }
             );
 
+            const replyUpdateData = { status: 'sent', folder: 'sent', unread: false, sent_at: new Date() };
+            // Save the SMTP messageId returned by the remote server
+            if (smtpResult && smtpResult.messageId) {
+                replyUpdateData.messageId = smtpResult.messageId;
+            }
             await prisma.email.update({
                 where: { id: emailId },
-                data: { status: 'sent', folder: 'sent', unread: false, sent_at: new Date() }
+                data: replyUpdateData
             });
 
             if (attachmentKeys.length > 0) {
