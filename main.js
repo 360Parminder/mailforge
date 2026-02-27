@@ -774,7 +774,7 @@ app.post('/send', validateApiKey, async (req, res) => {
             if (emailId) {
                 await prisma.email.update({
                     where: { id: emailId },
-                    data: { status: 'sent', folder: 'sent', sent_at: new Date() }
+                    data: { status: 'sent', folder: 'sent', sent_at: new Date(), unread: false }
                 });
                 if (attachmentKeys.length > 0) {
                     await prisma.attachment.updateMany({
