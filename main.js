@@ -824,6 +824,223 @@ app.post('/send', validateApiKey, async (req, res) => {
     }
 })
 
+// Reply endpoint: reply to an existing email (internal or traditional)
+app.post('/reply', validateApiKey, async (req, res) => {
+    let emailId;
+    try {
+        const { reply_to_id, body, html_body, content_type = 'text/plain',
+            attachments = [], expires_at = null, self_destruct = false } = req.body;
+
+        // reply_to_id is required
+        if (!reply_to_id) {
+            return res.status(400).json({
+                success: false,
+                message: 'reply_to_id is required'
+            });
+        }
+
+        if (!body && !html_body) {
+            return res.status(400).json({
+                success: false,
+                message: 'body or html_body is required'
+            });
+        }
+
+        if (!req.turnstileVerified) {
+            return res.status(403).json({
+                success: false,
+                message: 'Turnstile verification failed. Please try again.'
+            });
+        }
+
+        // Fetch original email to get reply context
+        const originalEmail = await getEmailById(reply_to_id);
+        if (!originalEmail) {
+            return res.status(404).json({
+                success: false,
+                message: 'Original email not found'
+            });
+        }
+
+        // Build reply fields
+        const from = `${req.user.username}@${req.user.domain}`;
+        // Reply goes to the original sender
+        const to = req.body.to || originalEmail.from_address;
+        // Auto-add Re: prefix if not already present
+        const subject = req.body.subject ||
+            (originalEmail.subject && originalEmail.subject.startsWith('Re:')
+                ? originalEmail.subject
+                : `Re: ${originalEmail.subject || '(No Subject)'}`);
+        // Thread linking: use original thread or start with original email id
+        const thread_id = originalEmail.thread_id_ref || originalEmail.id;
+
+        let fp, tp;
+        try {
+            fp = parseSharpAddress(from);
+            tp = parseSharpAddress(to);
+        } catch (e) {
+            return res.status(400).json({
+                success: false,
+                message: 'Invalid address format'
+            });
+        }
+
+        if (fp.domain !== DOMAIN) {
+            return res.status(403).json({
+                success: false,
+                message: `This server does not relay mail for the domain ${fp.domain}`
+            });
+        }
+
+        const attachmentKeys = attachments.map(att => att.key).filter(Boolean);
+
+        // Build the In-Reply-To / References for SMTP threading
+        const inReplyTo = originalEmail.messageId || null;
+        const references = inReplyTo ? inReplyTo : null;
+
+        // Store the reply email in the database
+        const classification = classifyEmail(subject, body, html_body);
+        const replyUser = await findUser(fp.username, fp.domain);
+
+        const replyEmail = await createEmail({
+            user: replyUser?.id || 'system',
+            from_address: from,
+            from_domain: fp.domain,
+            to_address: to,
+            to_domain: tp.domain,
+            subject: subject,
+            body: body || '',
+            html_body: html_body || null,
+            content_type: content_type,
+            status: 'pending',
+            folder: 'sent',
+            classification: classification,
+            reply_to_id: reply_to_id,
+            thread_id: thread_id,
+            expires_at: expires_at,
+            self_destruct: self_destruct,
+            sent_at: new Date(),
+            messageId: null,
+            inReplyTo: inReplyTo
+        });
+
+        emailId = replyEmail.id;
+
+        // Link attachments
+        if (emailId && attachmentKeys.length > 0) {
+            await prisma.attachment.updateMany({
+                where: { key: { in: attachmentKeys } },
+                data: { email_id: emailId, status: 'sending' }
+            });
+        }
+
+        // Deliver the reply based on destination
+        if (tp.domain === DOMAIN) {
+            // ── Internal delivery ──
+            if (!await verifyUser(tp.username, tp.domain)) {
+                await prisma.email.update({
+                    where: { id: emailId },
+                    data: { status: 'failed', error_message: 'Recipient user not found on this server' }
+                });
+                return res.status(404).json({ success: false, message: 'Recipient user not found on this server' });
+            }
+
+            // Create the email in recipient's inbox too
+            const recipientUser = await findUser(tp.username, tp.domain);
+            await createEmail({
+                user: recipientUser.id,
+                from_address: from,
+                from_domain: fp.domain,
+                to_address: to,
+                to_domain: tp.domain,
+                subject: subject,
+                body: body || '',
+                html_body: html_body || null,
+                content_type: content_type,
+                status: 'sent',
+                folder: 'inbox',
+                classification: classification,
+                reply_to_id: reply_to_id,
+                thread_id: thread_id,
+                expires_at: expires_at,
+                self_destruct: self_destruct,
+                sent_at: new Date()
+            });
+
+            // Update sender's copy as sent
+            await prisma.email.update({
+                where: { id: emailId },
+                data: { status: 'sent', folder: 'sent', unread: false, sent_at: new Date() }
+            });
+
+            if (attachmentKeys.length > 0) {
+                await prisma.attachment.updateMany({
+                    where: { key: { in: attachmentKeys } },
+                    data: { status: 'sent' }
+                });
+            }
+
+            console.log(`✅ Reply #${emailId} delivered locally to ${to}`);
+            return res.json({ success: true, id: emailId });
+        }
+
+        // ── External / Traditional delivery (Gmail, Outlook, etc.) ──
+        try {
+            await sendToTraditionalEmail(
+                from,
+                to,
+                subject,
+                body || '',
+                html_body || body || '',
+                { inReplyTo, references }
+            );
+
+            await prisma.email.update({
+                where: { id: emailId },
+                data: { status: 'sent', folder: 'sent', unread: false, sent_at: new Date() }
+            });
+
+            if (attachmentKeys.length > 0) {
+                await prisma.attachment.updateMany({
+                    where: { key: { in: attachmentKeys } },
+                    data: { status: 'sent' }
+                });
+            }
+
+            console.log(`✅ Reply #${emailId} sent via SMTP to ${to}`);
+            return res.json({ success: true, id: emailId });
+        } catch (e) {
+            console.error(`❌ Failed to send reply #${emailId}:`, e);
+            await prisma.email.update({
+                where: { id: emailId },
+                data: { status: 'failed', error_message: e.message }
+            });
+            if (attachmentKeys.length > 0) {
+                await prisma.attachment.updateMany({
+                    where: { email_id: emailId },
+                    data: { status: 'failed' }
+                });
+            }
+            return res.status(500).json({ success: false, message: e.message });
+        }
+    } catch (e) {
+        console.error('Reply request failed:', e);
+        if (emailId) {
+            const checkStatus = await prisma.email.findUnique({
+                where: { id: emailId },
+                select: { status: true }
+            });
+            if (checkStatus && !['failed', 'rejected', 'spam'].includes(checkStatus.status)) {
+                await prisma.email.update({
+                    where: { id: emailId },
+                    data: { status: 'failed', error_message: e.message }
+                });
+            }
+        }
+        return res.status(400).json({ success: false, message: e.message });
+    }
+})
+
 app.get('/server/health', (_, res) =>
     res.json({
         status: 'ok',

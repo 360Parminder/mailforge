@@ -8,7 +8,8 @@ const SMTP_BRIDGE_PORT = +process.env.SMTP_BRIDGE_PORT || 2525;
 
 // Send email directly to recipient's mail server (no relay needed)
 // Note: This function only handles SMTP delivery - caller is responsible for database logging
-export async function sendToTraditionalEmail(fromEmail, toEmail, subject, textBody, htmlBody) {
+// options: { inReplyTo, references } - optional headers for reply threading
+export async function sendToTraditionalEmail(fromEmail, toEmail, subject, textBody, htmlBody, options = {}) {
     try {
         const [, toDomain] = toEmail.split('@');
 
@@ -37,16 +38,26 @@ export async function sendToTraditionalEmail(fromEmail, toEmail, subject, textBo
             // No authentication needed - direct server-to-server
         });
 
+        const customHeaders = {
+            'X-Mailer': 'Mail Server'
+        };
+
         const mailOptions = {
             from: fromEmail, // Sender address is dynamic
             to: toEmail,
             subject: subject,
             text: textBody,
             html: htmlBody || textBody,
-            headers: {
-                'X-Mailer': 'Mail Server'
-            }
+            headers: customHeaders
         };
+
+        // Add reply threading headers for proper Gmail/Outlook threading
+        if (options.inReplyTo) {
+            mailOptions.inReplyTo = options.inReplyTo;
+        }
+        if (options.references) {
+            mailOptions.references = options.references;
+        }
 
         const info = await transporter.sendMail(mailOptions);
 
