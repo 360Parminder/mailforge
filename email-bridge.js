@@ -2,7 +2,7 @@ import nodemailer from 'nodemailer';
 import { SMTPServer } from 'smtp-server';
 import { simpleParser } from 'mailparser';
 import { resolveMx } from './dns-utils.js';
-import { createEmail, findUser, createAttachment } from './lib/prisma.js';
+import { prisma, createEmail, findUser, createAttachment } from './lib/prisma.js';
 import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
@@ -158,6 +158,8 @@ export function createBridgeReceiver() {
                     if (parsed.attachments && parsed.attachments.length > 0) {
                         console.log(`📎 Processing ${parsed.attachments.length} attachment(s)...`);
 
+                        const savedAttachments = [];
+
                         for (const att of parsed.attachments) {
                             try {
                                 // Generate unique key for the file
@@ -170,7 +172,7 @@ export function createBridgeReceiver() {
                                 fs.writeFileSync(filePath, att.content);
 
                                 // Create attachment record in database
-                                await createAttachment({
+                                const attachmentRecord = await createAttachment({
                                     user_id: user.id,
                                     key: key,
                                     filename: att.filename || 'unnamed',
@@ -180,11 +182,29 @@ export function createBridgeReceiver() {
                                     status: 'sent'
                                 });
 
+                                // Collect attachment info for the email's JSON attachments field
+                                savedAttachments.push({
+                                    id: attachmentRecord.id,
+                                    key: key,
+                                    filename: att.filename || 'unnamed',
+                                    size: att.size || att.content.length,
+                                    type: att.contentType || 'application/octet-stream'
+                                });
+
                                 console.log(`  📎 Saved attachment: ${att.filename || 'unnamed'} (${att.size || att.content.length} bytes) → ${key}`);
                             } catch (attErr) {
                                 console.error(`  ❌ Failed to save attachment ${att.filename}:`, attErr);
                                 // Continue processing other attachments even if one fails
                             }
+                        }
+
+                        // Update the email's JSON attachments field so frontends can see them
+                        if (savedAttachments.length > 0) {
+                            await prisma.email.update({
+                                where: { id: email.id },
+                                data: { attachments: JSON.stringify(savedAttachments) }
+                            });
+                            console.log(`📎 Updated email #${email.id} with ${savedAttachments.length} attachment(s) in DB`);
                         }
 
                         console.log(`📎 Finished processing attachments for email #${email.id}`);
