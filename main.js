@@ -26,7 +26,20 @@ import {
 
 const MAILFORGE_PORT = +process.env.MAILFORGE_PORT || 5000
 const HTTP_PORT = +process.env.HTTP_PORT || MAILFORGE_PORT + 1
+
 const DOMAIN = process.env.DOMAIN_NAME || 'localhost'
+
+async function isLocalDomain(domain) {
+    if (domain === DOMAIN) return true;
+    const verifiedDomain = await prisma.domain.findFirst({
+        where: {
+            domain: domain,
+            verified: true
+        }
+    });
+    return !!verifiedDomain;
+}
+
 
 const USERNAME_REGEX = /^[a-zA-Z0-9_\-!$%&'*/?=^@.]+$/;
 const MAX_USERNAME_LENGTH = 20;
@@ -505,7 +518,7 @@ async function processScheduledEmails() {
                 }
             });
             const to = parseSharpAddress(email.to_address);
-            if (to.domain === DOMAIN) {
+            if (await isLocalDomain(to.domain)) {
                 await prisma.email.update({
                     where: { id: email.id },
                     data: { status: 'sent' }
@@ -694,7 +707,7 @@ app.post('/send', validateApiKey, async (req, res) => {
             });
         }
 
-        if (fp.domain !== DOMAIN) {
+        if (!(await isLocalDomain(fp.domain))) {
             return res.status(403).json({
                 success: false,
                 message: `This server does not relay mail for the domain ${fp.domain}`
@@ -726,7 +739,7 @@ app.post('/send', validateApiKey, async (req, res) => {
             return res.json({ success: true, scheduled: true, id: emailId });
         }
 
-        if (tp.domain === DOMAIN) {
+        if (await isLocalDomain(tp.domain)) {
             if (!await verifyUser(tp.username, tp.domain)) {
                 return res.status(404).json({ success: false, message: 'Recipient user not found on this server' });
             }
@@ -903,7 +916,7 @@ app.post('/reply', validateApiKey, async (req, res) => {
             });
         }
 
-        if (fp.domain !== DOMAIN) {
+        if (!(await isLocalDomain(fp.domain))) {
             return res.status(403).json({
                 success: false,
                 message: `This server does not relay mail for the domain ${fp.domain}`
@@ -956,7 +969,7 @@ app.post('/reply', validateApiKey, async (req, res) => {
         }
 
         // Deliver the reply based on destination
-        if (tp.domain === DOMAIN) {
+        if (await isLocalDomain(tp.domain)) {
             // ── Internal delivery ──
             if (!await verifyUser(tp.username, tp.domain)) {
                 await prisma.email.update({
