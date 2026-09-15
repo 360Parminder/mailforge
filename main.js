@@ -30,14 +30,23 @@ const HTTP_PORT = +process.env.HTTP_PORT || MAILFORGE_PORT + 1
 const DOMAIN = process.env.DOMAIN_NAME || 'localhost'
 
 async function isLocalDomain(domain) {
-    if (domain === DOMAIN) return true;
+    if (!domain) return false;
+    if (domain.toLowerCase() === DOMAIN.toLowerCase()) return true;
     const verifiedDomain = await prisma.domain.findFirst({
         where: {
-            domain: domain,
+            domain: { equals: domain, mode: 'insensitive' },
             verified: true
         }
     });
-    return !!verifiedDomain;
+    if (verifiedDomain) return true;
+
+    // Also allow domains belonging to registered users on this server
+    const userWithDomain = await prisma.user.findFirst({
+        where: {
+            domain: { equals: domain, mode: 'insensitive' }
+        }
+    });
+    return !!userWithDomain;
 }
 
 
