@@ -15,45 +15,45 @@ datasource db {
 // ============================================================================
 
 model User {
-  id            String    @id @default(uuid())
+  id       String  @id @default(uuid())
   // User authentication & identity
-  username      String    // email username (before @)
-  domain        String    // email domain (after @)
-  email         String?   @unique // full email for web login (optional)
-  password      String    @map("password_hash") // bcrypt hashed password
-  
+  username String // email username (before @)
+  domain   String // email domain (after @)
+  email    String? @unique // full email for web login (optional)
+  password String  @map("password_hash") // bcrypt hashed password
+
   // User profile (from your schema)
-  name          String?
-  avatar        String?   @default("https://i.ibb.co/Vc2BSM8Z/image.webp")
-  dob           DateTime?
-  address       String?
-  contact       String?
-  gender        Gender?
-  role          Role      @default(user)
-  
+  name    String?
+  avatar  String?   @default("https://res.cloudinary.com/dvo4tvvgb/image/upload/v1737770516/Profile/image.jpg")
+  dob     DateTime?
+  address String?
+  contact String?
+  gender  Gender?
+  role    String    @default("user") @db.VarChar(50)
+
   // Account status & security
-  active        Boolean   @default(true)
-  is_banned     Boolean   @default(false) @map("is_banned")
-  is_admin      Boolean   @default(false) @map("is_admin")
-  
+  active    Boolean @default(true)
+  is_banned Boolean @default(false) @map("is_banned")
+  is_admin  Boolean @default(false) @map("is_admin")
+
   // Tracking
-  ip            String?   @db.VarChar(48)
-  user_agent    String?   @db.Text
-  deleted_at    DateTime? @map("deleted_at")
-  createdAt     DateTime  @default(now()) @map("created_at")
-  updatedAt     DateTime  @updatedAt @map("updated_at")
+  ip         String?   @db.VarChar(48)
+  user_agent String?   @db.Text
+  deleted_at DateTime? @map("deleted_at")
+  createdAt  DateTime  @default(now()) @map("created_at")
+  updatedAt  DateTime  @updatedAt @map("updated_at")
 
   // Relations
-  domains           Domain[]
-  emails            Email[]
-  sentEmails        Email[]          @relation("SentEmails")
-  secretCodes       UserSecretCode[]
-  starredEmails     EmailStar[]
-  drafts            EmailDraft[]
-  contacts          Contact[]
-  attachments       Attachment[]
-  storageLimit      UserStorageLimit?
-  settings          UserSettings?
+  domains       Domain[]
+  emails        Email[]
+  sentEmails    Email[]           @relation("SentEmails")
+  secretCodes   UserSecretCode[]
+  starredEmails EmailStar[]
+  drafts        EmailDraft[]
+  contacts      Contact[]
+  attachments   Attachment[]
+  storageLimit  UserStorageLimit?
+  settings      UserSettings?
 
   @@unique([username, domain])
   @@index([username])
@@ -101,7 +101,7 @@ model UserStorageLimit {
 model Domain {
   id                String   @id @default(uuid())
   domain            String   @unique
-  owner             String   // User ID
+  owner             String // User ID
   ownerUser         User     @relation(fields: [owner], references: [id], onDelete: Cascade)
   verified          Boolean  @default(false)
   verificationToken String?  @map("verification_token")
@@ -120,84 +120,54 @@ model Domain {
 // ============================================================================
 
 model Email {
-  id             String               @id @default(uuid())
-  
-  // Message identification (from your schema)
-  messageId      String?              @unique @map("message_id")
-  avatar         String?
-  
-  // Addressing
-  from_address   String               @db.VarChar(255) // user@domain
-  from_domain    String               @db.VarChar(255)
-  to_address     String               @db.VarChar(255) // primary recipient
-  to_domain      String               @db.VarChar(255)
-  recipient      String?              // Additional recipient field from your schema
-  
-  // Multiple recipients (from your schema)
-  cc             String[]             @default([])
-  bcc            String[]             @default([])
-  
-  // Content
-  subject        String?              @db.Text
-  body           String?              @db.Text // plain text body
-  text           String?              @db.Text // alias for body
-  html           String?              @db.Text // alias for html_body
-  html_body      String?              @map("html_body") @db.Text
-  content_type   String?              @default("text/plain") @map("content_type") @db.VarChar(50)
-  
-  // Attachments
-  attachments    Json                 @default("[]")
+  id               String              @id @default(uuid())
+  messageId        String?             @unique @map("message_id")
+  avatar           String?
+  from_address     String              @db.VarChar(255) // user@domain
+  from_domain      String              @db.VarChar(255)
+  to_address       String              @db.VarChar(255) // primary recipient
+  to_domain        String              @db.VarChar(255)
+  recipient        String? // Additional recipient field from your schema
+  cc               String[]            @default([])
+  bcc              String[]            @default([])
+  subject          String?             @db.Text
+  body             String?             @db.Text // plain text body
+  text             String?             @db.Text // alias for body
+  html             String?             @db.Text // alias for html_body
+  html_body        String?             @map("html_body") @db.Text
+  content_type     String?             @default("text/plain") @map("content_type") @db.VarChar(50)
+  attachments      Json                @default("[]")
   emailAttachments Attachment[]
-  
-  // Status & delivery
-  status         EmailStatus          @default(pending)
-  error_message  String?              @map("error_message") @db.Text
-  sent_at        DateTime?            @default(now()) @map("sent_at")
-  date           DateTime             @default(now())
-  
-  // Organization (from your schema)
-  folder         Folder               @default(inbox)
-  labels         String[]             @default([])
-  
-  // Classification
-  classification EmailClassification  @default(primary)
-  
-  // Thread & reply
-  threadId       String?              @map("thread_id")
-  thread_id_ref  String?              @map("thread_id_ref")
-  threadRef      Email?               @relation("EmailThread", fields: [thread_id_ref], references: [id])
-  threadEmails   Email[]              @relation("EmailThread")
-  inReplyTo      String?              @map("in_reply_to")
-  reply_to_id    String?              @map("reply_to_id")
-  replyTo        Email?               @relation("EmailReply", fields: [reply_to_id], references: [id])
-  replies        Email[]              @relation("EmailReply")
-  
-  // Flags & states (from your schema)
-  unread         Boolean              @default(true)
-  flagged        Boolean              @default(false)
-  starred        Boolean              @default(false)
-  
-  // Advanced features
-  snooze_until   DateTime?            @map("snooze_until")
-  read_at        DateTime?            @map("read_at")
-  scheduled_at   DateTime?            @map("scheduled_at")
-  expires_at     DateTime?            @map("expires_at")
-  self_destruct  Boolean              @default(false) @map("self_destruct")
-  
-  // User ownership
-  user          String                 // User ID
-  userInfo       User?                @relation(fields: [user], references: [id], onDelete: Cascade)
-  
-  // Additional user relation for sent emails
-  from_user_id   String?                 @map("from_user_id")
-  fromUser       User?                @relation("SentEmails", fields: [from_user_id], references: [id])
-  
-  // Timestamps
-  createdAt      DateTime             @default(now()) @map("created_at")
-  updatedAt      DateTime             @updatedAt @map("updated_at")
-
-  // Stars relation
-  stars          EmailStar[]
+  status           String              @default("pending") @db.VarChar(50)
+  error_message    String?             @map("error_message") @db.Text
+  sent_at          DateTime?           @default(now()) @map("sent_at")
+  date             DateTime            @default(now())
+  folder           String              @default("inbox") @db.VarChar(50)
+  labels           String[]            @default([])
+  classification   EmailClassification @default(primary)
+  threadId         String?             @map("thread_id")
+  thread_id_ref    String?             @map("thread_id_ref")
+  threadRef        Email?              @relation("EmailThread", fields: [thread_id_ref], references: [id])
+  threadEmails     Email[]             @relation("EmailThread")
+  inReplyTo        String?             @map("in_reply_to")
+  reply_to_id      String?             @map("reply_to_id")
+  replyTo          Email?              @relation("EmailReply", fields: [reply_to_id], references: [id])
+  replies          Email[]             @relation("EmailReply")
+  unread           Boolean             @default(true)
+  flagged          Boolean             @default(false)
+  starred          Boolean             @default(false)
+  snooze_until     DateTime?           @map("snooze_until")
+  read_at          DateTime?           @map("read_at")
+  scheduled_at     DateTime?           @map("scheduled_at")
+  expires_at       DateTime?           @map("expires_at")
+  self_destruct    Boolean             @default(false) @map("self_destruct")
+  user             String // User ID
+  userInfo         User?               @relation(fields: [user], references: [id], onDelete: Cascade)
+  from_user_id     String?             @map("from_user_id")
+  fromUser         User?               @relation("SentEmails", fields: [from_user_id], references: [id])
+  createdAt        DateTime            @default(now()) @map("created_at")
+  updatedAt        DateTime            @updatedAt @map("updated_at")
+  stars            EmailStar[]
 
   @@index([messageId])
   @@index([from_address])
@@ -268,7 +238,7 @@ model Attachment {
   user       User?     @relation(fields: [user_id], references: [id], onDelete: SetNull)
   key        String    @unique @db.Text
   filename   String    @db.Text
-  size       Int       // Max 25MB enforced at application level
+  size       Int // Max 25MB enforced at application level
   type       String    @db.Text
   created_at DateTime  @default(now()) @map("created_at")
   expires_at DateTime? @map("expires_at")

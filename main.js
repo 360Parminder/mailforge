@@ -149,12 +149,13 @@ const logEmail = async (fa, fd, ta, td, s, b, ct = 'text/plain', hb = null, st =
     // Determine which user to associate the email with
     // For incoming/received emails (status: sent), use the recipient (to)
     // For outgoing/pending emails, try sender first, then recipient
+    const sender = await findUser(fa.split('@')[0], fd);
     let user = null;
     if (st === 'sent' || st === 'delivered') {
         user = await findUser(ta.split('@')[0], td);
     }
     if (!user) {
-        user = await findUser(fa.split('@')[0], fd);
+        user = sender;
     }
 
     // Auto-generate messageId if not provided
@@ -162,6 +163,7 @@ const logEmail = async (fa, fd, ta, td, s, b, ct = 'text/plain', hb = null, st =
 
     const email = await createEmail({
         user: user?.id || 'system',
+        from_user_id: sender?.id || null,
         from_address: fa,
         from_domain: fd,
         to_address: ta,
@@ -734,10 +736,16 @@ app.post('/send', validateApiKey, async (req, res) => {
             }
         }
 
+        let resolvedReplyToId = reply_to_id;
+        if (reply_to_id) {
+            const parentEmail = await getEmailById(reply_to_id);
+            if (parentEmail) resolvedReplyToId = parentEmail.id;
+        }
+
         const attachmentKeys = attachments.map(att => att.key).filter(Boolean);
 
         if (scheduled_at && status === 'scheduled') {
-            logEntry = await logEmail(from, fp.domain, to, tp.domain, subject, body, content_type, html_body, status, scheduled_at, reply_to_id, thread_id, expires_at, self_destruct);
+            logEntry = await logEmail(from, fp.domain, to, tp.domain, subject, body, content_type, html_body, status, scheduled_at, resolvedReplyToId, thread_id, expires_at, self_destruct);
             emailId = logEntry[0]?.id;
             if (emailId && attachmentKeys.length > 0) {
                 await prisma.attachment.updateMany({
@@ -753,7 +761,7 @@ app.post('/send', validateApiKey, async (req, res) => {
                 return res.status(404).json({ success: false, message: 'Recipient user not found on this server' });
             }
             const finalStatus = status === 'pending' ? 'sent' : status;
-            logEntry = await logEmail(from, fp.domain, to, tp.domain, subject, body, content_type, html_body, finalStatus, null, reply_to_id, thread_id, expires_at, self_destruct);
+            logEntry = await logEmail(from, fp.domain, to, tp.domain, subject, body, content_type, html_body, finalStatus, null, resolvedReplyToId, thread_id, expires_at, self_destruct);
             emailId = logEntry[0]?.id;
             if (emailId && attachmentKeys.length > 0) {
                 await prisma.attachment.updateMany({
@@ -767,7 +775,7 @@ app.post('/send', validateApiKey, async (req, res) => {
         logEntry = await logEmail(
             from, fp.domain, to, tp.domain, subject, body,
             content_type, html_body, status, scheduled_at,
-            reply_to_id, thread_id, expires_at, self_destruct
+            resolvedReplyToId, thread_id, expires_at, self_destruct
         );
         emailId = logEntry[0]?.id;
 
@@ -945,8 +953,55 @@ app.post('/reply', validateApiKey, async (req, res) => {
         // Generate a messageId for the reply
         const replyMessageId = generateMessageId(fp.domain);
 
+        // Deliver the reply based on destination
+        if (await isLocalDomain(tp.domain)) {
+            // ── Internal delivery ──
+            const recipientUser = await findUser(tp.username, tp.domain);
+            if (!recipientUser) {
+                return res.status(404).json({ success: false, message: 'Recipient user not found on this server' });
+            }
+
+            // Create single email record for local delivery (shared by sender & recipient)
+            const replyEmail = await createEmail({
+                user: recipientUser.id,
+                from_user_id: replyUser?.id,
+                from_address: from,
+                from_domain: fp.domain,
+                to_address: to,
+                to_domain: tp.domain,
+                subject: subject,
+                body: body || '',
+                html_body: html_body || null,
+                content_type: content_type,
+                status: 'sent',
+                folder: 'inbox',
+                classification: classification,
+                reply_to_id: originalEmail.id,
+                thread_id: thread_id,
+                expires_at: expires_at,
+                self_destruct: self_destruct,
+                sent_at: new Date(),
+                messageId: replyMessageId,
+                inReplyTo: inReplyTo
+            });
+
+            emailId = replyEmail.id;
+
+            if (attachmentKeys.length > 0) {
+                await prisma.attachment.updateMany({
+                    where: { key: { in: attachmentKeys } },
+                    data: { email_id: emailId, status: 'sent' }
+                });
+            }
+
+            console.log(`✅ Reply #${emailId} delivered locally to ${to}`);
+            return res.json({ success: true, id: emailId });
+        }
+
+        // ── External / Traditional delivery (Gmail, Outlook, etc.) ──
         const replyEmail = await createEmail({
             user: replyUser?.id || 'system',
+            from_user_id: replyUser?.id,
             from_address: from,
             from_domain: fp.domain,
             to_address: to,
@@ -958,7 +1013,7 @@ app.post('/reply', validateApiKey, async (req, res) => {
             status: 'pending',
             folder: 'sent',
             classification: classification,
-            reply_to_id: reply_to_id,
+            reply_to_id: originalEmail.id,
             thread_id: thread_id,
             expires_at: expires_at,
             self_destruct: self_destruct,
@@ -975,57 +1030,6 @@ app.post('/reply', validateApiKey, async (req, res) => {
                 where: { key: { in: attachmentKeys } },
                 data: { email_id: emailId, status: 'sending' }
             });
-        }
-
-        // Deliver the reply based on destination
-        if (await isLocalDomain(tp.domain)) {
-            // ── Internal delivery ──
-            if (!await verifyUser(tp.username, tp.domain)) {
-                await prisma.email.update({
-                    where: { id: emailId },
-                    data: { status: 'failed', error_message: 'Recipient user not found on this server' }
-                });
-                return res.status(404).json({ success: false, message: 'Recipient user not found on this server' });
-            }
-
-            // Create the email in recipient's inbox too
-            const recipientUser = await findUser(tp.username, tp.domain);
-            await createEmail({
-                user: recipientUser.id,
-                from_address: from,
-                from_domain: fp.domain,
-                to_address: to,
-                to_domain: tp.domain,
-                subject: subject,
-                body: body || '',
-                html_body: html_body || null,
-                content_type: content_type,
-                status: 'sent',
-                folder: 'inbox',
-                classification: classification,
-                reply_to_id: reply_to_id,
-                thread_id: thread_id,
-                expires_at: expires_at,
-                self_destruct: self_destruct,
-                sent_at: new Date(),
-                messageId: replyMessageId
-            });
-
-            // Update sender's copy as sent
-            await prisma.email.update({
-                where: { id: emailId },
-                data: { status: 'sent', folder: 'sent', unread: false, sent_at: new Date() }
-            });
-
-            if (attachmentKeys.length > 0) {
-                await prisma.attachment.updateMany({
-                    where: { key: { in: attachmentKeys } },
-                    data: { status: 'sent' }
-                });
-            }
-
-            console.log(`✅ Reply #${emailId} delivered locally to ${to}`);
-            return res.json({ success: true, id: emailId });
         }
 
         // ── External / Traditional delivery (Gmail, Outlook, etc.) ──
